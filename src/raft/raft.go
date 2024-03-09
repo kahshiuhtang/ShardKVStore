@@ -60,9 +60,11 @@ type Raft struct {
 	// Your data here (3A, 3B, 3C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	currentTerm int
-	votedFor    int
-	recievedMsg bool
+	currentTerm  int
+	votedFor     int
+	receivedMsg  bool
+	currentVotes int
+	isLeader     bool
 }
 
 // return currentTerm and whether this server
@@ -70,10 +72,11 @@ type Raft struct {
 func (rf *Raft) GetState() (int, bool) {
 
 	var term int
-	var isleader bool
+	var isLeader bool
 	// Your code here (3A).
-
-	return term, isleader
+	term = rf.currentTerm
+	isLeader = rf.isLeader
+	return term, isLeader
 }
 
 // save Raft's persistent state to stable storage,
@@ -133,40 +136,40 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	term   int
-	sucess bool
+	term    int
+	success bool
 }
 
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (3A, 3B).
-	term         int
-	candidateId  int
-	lastLogIndex int
-	lastLogTerm  int
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (3A).
-	term        int
-	voteGranted bool
+	Term        int
+	VoteGranted bool
 }
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (3A, 3B).
-	reply.term = rf.currentTerm
-	if args.term < rf.currentTerm {
-		reply.voteGranted = false
+	reply.Term = rf.currentTerm
+	if args.Term < rf.currentTerm {
+		reply.VoteGranted = false
 		rf.votedFor = -1
 	} else if rf.votedFor == -1 {
-		reply.voteGranted = true
-		rf.votedFor = args.candidateId
+		reply.VoteGranted = true
+		rf.votedFor = args.CandidateId
 	} else {
-		reply.voteGranted = false
+		reply.VoteGranted = false
 		rf.votedFor = -1
 	}
 }
@@ -175,7 +178,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// Your code here (3A, 3B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.recievedMsg = true
+	rf.receivedMsg = true
+	if len(args.entries) != 0 {
+		if args.leaderTerm < rf.currentTerm {
+			reply.term = rf.currentTerm
+			reply.success = false
+			return
+		}
+	}
 
 }
 
@@ -208,6 +218,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
@@ -253,21 +268,34 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) ticker() {
-	for rf.killed() == false {
-		rf.mu.Lock()
+	for !rf.killed() {
 		// Your code here (3A)
 		// Check if a leader election should be started.
+		rf.mu.Lock()
 		rf.currentTerm += 1
-		if !rf.recievedMsg {
+		rf.mu.Unlock()
+		if !rf.receivedMsg {
+			var wg sync.WaitGroup
 			for i := 0; i < len(rf.peers); i++ {
+				wg.Add(1)
 				go func(idx int) {
-					rf.sendRequestVote(idx, &RequestVoteArgs{term: rf.currentTerm, candidateId: rf.me, lastLogIndex: 0, lastLogTerm: 0}, &RequestVoteReply{})
+					defer wg.Done()
+					req := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me, LastLogIndex: 0, LastLogTerm: 0}
+					rep := RequestVoteReply{}
+					ok := rf.sendRequestVote(idx, &req, &rep)
+					if ok && rep.VoteGranted {
+						rf.mu.Lock()
+						defer rf.mu.Unlock()
+						rf.currentVotes += 1
+					}
 				}(i)
 			}
+			wg.Wait()
+		} else {
+			rf.receivedMsg = false
 		}
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		rf.mu.Unlock()
 		ms := 50 + (rand.Int63() % 300)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
