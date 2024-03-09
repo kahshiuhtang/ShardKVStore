@@ -62,6 +62,7 @@ type Raft struct {
 	// state a Raft server must maintain.
 	currentTerm int
 	votedFor    int
+	recievedMsg bool
 }
 
 // return currentTerm and whether this server
@@ -157,27 +158,25 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (3A, 3B).
+	reply.term = rf.currentTerm
 	if args.term < rf.currentTerm {
 		reply.voteGranted = false
 		rf.votedFor = -1
 	} else if rf.votedFor == -1 {
-		reply.term = rf.currentTerm
 		reply.voteGranted = true
 		rf.votedFor = args.candidateId
+	} else {
+		reply.voteGranted = false
+		rf.votedFor = -1
 	}
 }
 
-// example RequestVote RPC handler.
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// Your code here (3A, 3B).
-	if args.term < rf.currentTerm {
-		reply.voteGranted = false
-		rf.votedFor = -1
-	} else if rf.votedFor == -1 {
-		reply.term = rf.currentTerm
-		reply.voteGranted = true
-		rf.votedFor = args.candidateId
-	}
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.recievedMsg = true
+
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -255,12 +254,20 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
-
+		rf.mu.Lock()
 		// Your code here (3A)
 		// Check if a leader election should be started.
-
+		rf.currentTerm += 1
+		if !rf.recievedMsg {
+			for i := 0; i < len(rf.peers); i++ {
+				go func(idx int) {
+					rf.sendRequestVote(idx, &RequestVoteArgs{term: rf.currentTerm, candidateId: rf.me, lastLogIndex: 0, lastLogTerm: 0}, &RequestVoteReply{})
+				}(i)
+			}
+		}
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
+		rf.mu.Unlock()
 		ms := 50 + (rand.Int63() % 300)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
