@@ -127,17 +127,17 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 }
 
 type AppendEntriesArgs struct {
-	leaderTerm      int
-	leaderId        int
-	prevLogIndex    int
-	prevLogTerm     int
-	entries         []ApplyMsg
-	leaderCommitIdx int
+	LeaderTerm      int
+	LeaderId        int
+	PrevLogIndex    int
+	PrevLogTerm     int
+	Entries         []ApplyMsg
+	LeaderCommitIdx int
 }
 
 type AppendEntriesReply struct {
-	term    int
-	success bool
+	Term    int
+	Success bool
 }
 
 // example RequestVote RPC arguments structure.
@@ -179,10 +179,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.receivedMsg = true
-	if len(args.entries) != 0 {
-		if args.leaderTerm < rf.currentTerm {
-			reply.term = rf.currentTerm
-			reply.success = false
+	if len(args.Entries) != 0 {
+		if args.LeaderTerm < rf.currentTerm {
+			reply.Term = rf.currentTerm
+			reply.Success = false
 			return
 		}
 	}
@@ -274,8 +274,11 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		rf.currentTerm += 1
 		rf.mu.Unlock()
-		if !rf.receivedMsg {
+		if rf.isLeader {
+
+		} else if !rf.receivedMsg {
 			var wg sync.WaitGroup
+			rf.currentVotes = 1
 			for i := 0; i < len(rf.peers); i++ {
 				wg.Add(1)
 				go func(idx int) {
@@ -291,6 +294,16 @@ func (rf *Raft) ticker() {
 				}(i)
 			}
 			wg.Wait()
+			if rf.currentVotes >= len(rf.peers)/2 {
+				rf.isLeader = true
+				for i := 0; i < len(rf.peers); i++ {
+					go func(idx int) {
+						args := AppendEntriesArgs{LeaderTerm: rf.currentTerm, LeaderId: rf.me}
+						reply := AppendEntriesReply{}
+						rf.sendAppendEntries(idx, &args, &reply)
+					}(i)
+				}
+			}
 		} else {
 			rf.receivedMsg = false
 		}
