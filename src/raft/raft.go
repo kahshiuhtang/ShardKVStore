@@ -70,7 +70,6 @@ type Raft struct {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
 	var term int
 	var isLeader bool
 	// Your code here (3A).
@@ -161,16 +160,16 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (3A, 3B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		reply.VoteGranted = false
-		rf.votedFor = -1
 	} else if rf.votedFor == -1 {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
 	} else {
 		reply.VoteGranted = false
-		rf.votedFor = -1
 	}
 }
 
@@ -241,7 +240,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
-	isLeader := true
+	isLeader := rf.isLeader
 
 	// Your code here (3B).
 
@@ -271,29 +270,34 @@ func (rf *Raft) ticker() {
 	for !rf.killed() {
 		// Your code here (3A)
 		// Check if a leader election should be started.
-		rf.mu.Lock()
-		rf.currentTerm += 1
-		rf.mu.Unlock()
 		if rf.isLeader {
-
+			for i := 0; i < len(rf.peers); i++ {
+				go func(idx int) {
+					args := AppendEntriesArgs{LeaderTerm: rf.currentTerm, LeaderId: rf.me}
+					reply := AppendEntriesReply{}
+					rf.sendAppendEntries(idx, &args, &reply)
+					if reply.Term > rf.currentTerm {
+						rf.isLeader = false
+					}
+				}(i)
+			}
 		} else if !rf.receivedMsg {
-			var wg sync.WaitGroup
+			rf.mu.Lock()
+			rf.currentTerm += 1
+			defer rf.mu.Unlock()
 			rf.currentVotes = 1
 			for i := 0; i < len(rf.peers); i++ {
-				wg.Add(1)
 				go func(idx int) {
-					defer wg.Done()
 					req := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me, LastLogIndex: 0, LastLogTerm: 0}
-					rep := RequestVoteReply{}
+					rep := RequestVoteReply{VoteGranted: false}
 					ok := rf.sendRequestVote(idx, &req, &rep)
 					if ok && rep.VoteGranted {
-						rf.mu.Lock()
-						defer rf.mu.Unlock()
 						rf.currentVotes += 1
 					}
 				}(i)
 			}
-			wg.Wait()
+			ms := (rand.Int63() % 2500)
+			time.Sleep(time.Duration(ms) * time.Millisecond)
 			if rf.currentVotes >= len(rf.peers)/2 {
 				rf.isLeader = true
 				for i := 0; i < len(rf.peers); i++ {
@@ -301,6 +305,9 @@ func (rf *Raft) ticker() {
 						args := AppendEntriesArgs{LeaderTerm: rf.currentTerm, LeaderId: rf.me}
 						reply := AppendEntriesReply{}
 						rf.sendAppendEntries(idx, &args, &reply)
+						if reply.Term > rf.currentTerm {
+							rf.isLeader = false
+						}
 					}(i)
 				}
 			}
