@@ -331,7 +331,7 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) requestVotes() {
 	rf.mu.Lock()
 	args := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me}
-	rf.mu.Unlock()
+	defer rf.mu.Unlock()
 	for server := range rf.peers {
 		if server != rf.me && rf.currentState == CANDIDATE {
 			go rf.sendRequestVote(server, &args, &RequestVoteReply{})
@@ -342,8 +342,8 @@ func (rf *Raft) requestVotes() {
 
 func (rf *Raft) sendHeartbeats() {
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	args := AppendEntriesArgs{LeaderTerm: rf.currentTerm, LeaderId: rf.me}
-	rf.mu.Unlock()
 	for server := range rf.peers {
 		if server != rf.me && rf.currentState == LEADER {
 			go rf.sendAppendEntries(server, &args, &AppendEntriesReply{})
@@ -378,9 +378,13 @@ func (rf *Raft) ticker() {
 			go rf.requestVotes()
 			select {
 			case <-rf.heartbeatChan:
+				rf.mu.Lock()
 				rf.currentState = FOLLOWER
+				rf.mu.Unlock()
 			case <-rf.winElectChan:
+				rf.mu.Lock()
 				rf.currentState = LEADER
+				rf.mu.Unlock()
 			case <-time.After(time.Millisecond * time.Duration(rand.Intn(200)+250)):
 			}
 		case LEADER:
