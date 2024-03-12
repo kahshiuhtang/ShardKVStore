@@ -57,6 +57,10 @@ const (
 	Leader
 )
 
+type LogEntry struct {
+	term int
+}
+
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -73,6 +77,8 @@ type Raft struct {
 	receivedMsg  bool
 	currentVotes int
 	currentState RaftState
+	logs         []LogEntry
+	responses    int
 }
 
 // return currentTerm and whether this server
@@ -81,9 +87,11 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isLeader bool
 	// Your code here (3A).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	term = rf.currentTerm
 	isLeader = false
-	if rf.currentState == Leader {
+	if rf.currentState == Leader && rf.responses != 0 {
 		isLeader = true
 	}
 	return term, isLeader
@@ -171,6 +179,8 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (3A, 3B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
 	if rf.currentState == Candidate && rf.currentTerm <= args.Term {
 		rf.currentState = Follower
@@ -191,6 +201,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// Your code here (3A, 3B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	rf.receivedMsg = true
 	rf.currentState = Follower
 	if len(args.Entries) != 0 {
@@ -289,29 +301,36 @@ func (rf *Raft) ticker() {
 		// Check if a leader election should be started.
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		ms := 750 + (rand.Int63() % 750)
+		ms := 500 + (rand.Int63() % 500)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
+		rf.mu.Lock()
 		if rf.currentState == Leader {
-			for i := 0; i < len(rf.peers); i++ {
-				go func(idx int) {
-
-					args := AppendEntriesArgs{LeaderTerm: rf.currentTerm, LeaderId: rf.me}
-					reply := AppendEntriesReply{}
-					rf.sendAppendEntries(idx, &args, &reply)
-					if reply.Term > rf.currentTerm {
+			totalPeers := len(rf.peers)
+			if rf.responses == 0 { // [NOTE] maybe this shouldnt be zero, what is the min amount it can be?
+				rf.currentState = Follower
+				rf.mu.Unlock()
+			} else {
+				rf.mu.Unlock()
+				for i := 0; i < totalPeers; i++ {
+					go func(idx int) {
+						args := AppendEntriesArgs{LeaderTerm: rf.currentTerm, LeaderId: rf.me}
+						reply := AppendEntriesReply{}
+						rf.sendAppendEntries(idx, &args, &reply)
 						rf.mu.Lock()
 						defer rf.mu.Unlock()
-						rf.currentState = Follower
-					}
-				}(i)
+						if reply.Term > rf.currentTerm {
+							rf.currentState = Follower
+						}
+					}(i)
+				}
 			}
 		} else if !rf.receivedMsg {
-			rf.mu.Lock()
 			rf.currentTerm += 1
 			rf.currentVotes = 1
 			rf.currentState = Candidate
+			totalPeers := len(rf.peers)
 			rf.mu.Unlock()
-			for i := 0; i < len(rf.peers); i++ {
+			for i := 0; i < totalPeers; i++ {
 				if rf.me != i {
 					go func(idx int) {
 						req := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me, LastLogIndex: 0, LastLogTerm: 0}
@@ -325,10 +344,13 @@ func (rf *Raft) ticker() {
 					}(i)
 				}
 			}
-			ms := (rand.Int63() % 500)
+			ms := 500 + (rand.Int63() % 500)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
-			if rf.currentState == Candidate && rf.currentVotes >= len(rf.peers)/2 {
+			rf.mu.Lock()
+			if rf.currentState == Candidate && rf.currentVotes >= len(rf.peers)/2 && len(rf.peers) > 1 {
 				rf.currentState = Leader
+				rf.responses = 0
+				rf.mu.Unlock()
 				for i := 0; i < len(rf.peers); i++ {
 					if rf.me != i {
 						go func(idx int) {
@@ -336,8 +358,12 @@ func (rf *Raft) ticker() {
 								args := AppendEntriesArgs{LeaderTerm: rf.currentTerm, LeaderId: rf.me}
 								reply := AppendEntriesReply{}
 								rf.sendAppendEntries(idx, &args, &reply)
+								rf.mu.Lock()
+								defer rf.mu.Unlock()
 								if reply.Term > rf.currentTerm {
 									rf.currentState = Follower
+								} else {
+									rf.responses += 1
 								}
 							}
 						}(i)
@@ -346,9 +372,11 @@ func (rf *Raft) ticker() {
 			} else {
 				rf.currentState = Follower
 				rf.currentVotes = 0
+				rf.mu.Unlock()
 			}
 		} else {
 			rf.receivedMsg = false
+			rf.mu.Unlock()
 		}
 	}
 }
