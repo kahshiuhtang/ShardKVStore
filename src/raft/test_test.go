@@ -29,11 +29,13 @@ func TestInitialElection3A(t *testing.T) {
 	cfg.begin("Test (3A): initial election")
 
 	// is a leader elected?
+	fmt.Println("Check one leader")
 	cfg.checkOneLeader()
 
 	// sleep a bit to avoid racing with followers learning of the
 	// election, then check that all peers agree on the term.
 	time.Sleep(50 * time.Millisecond)
+	fmt.Println("Check terms")
 	term1 := cfg.checkTerms()
 	if term1 < 1 {
 		t.Fatalf("term is %v, but should be at least 1", term1)
@@ -41,12 +43,14 @@ func TestInitialElection3A(t *testing.T) {
 
 	// does the leader+term stay the same if there is no network failure?
 	time.Sleep(2 * RaftElectionTimeout)
+	fmt.Println("Check terms")
 	term2 := cfg.checkTerms()
 	if term1 != term2 {
 		fmt.Printf("warning: term changed even though there were no failures")
 	}
 
 	// there should still be a leader.
+	fmt.Println("Check one leader")
 	cfg.checkOneLeader()
 
 	cfg.end()
