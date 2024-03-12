@@ -49,6 +49,13 @@ type ApplyMsg struct {
 	SnapshotTerm  int
 	SnapshotIndex int
 }
+
+type LogEntry struct {
+	Index   int
+	Term    int
+	Command interface{}
+}
+
 type RaftState int
 
 const (
@@ -56,10 +63,6 @@ const (
 	CANDIDATE
 	LEADER
 )
-
-type LogEntry struct {
-	term int
-}
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
@@ -75,8 +78,11 @@ type Raft struct {
 	currentTerm  int
 	votedFor     int
 	currentVotes int
-	receivedMsg  bool
 	currentState RaftState
+
+	prevLogTerm  int
+	prevLogIndex int
+	commitIdx    int
 	logs         []LogEntry
 
 	applyMsgChan  chan ApplyMsg
@@ -306,7 +312,21 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := false
 
 	// Your code here (3B).
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	isLeader = rf.currentState == LEADER
+	if isLeader {
+		index = rf.prevLogIndex + 1
+		term = rf.currentTerm
+		args := AppendEntriesArgs{LeaderTerm: rf.currentTerm, LeaderId: rf.me, PrevLogIndex: rf.prevLogIndex, LeaderCommitIdx: rf.commitIdx}
+		for server := range rf.peers {
+			args.Entries = make([]ApplyMsg, 1)
+			args.Entries[0] = ApplyMsg{CommandValid: true}
+			if server != rf.me {
+				go rf.sendAppendEntries(server, &args, &AppendEntriesReply{})
+			}
+		}
+	}
 	return index, term, isLeader
 }
 
@@ -409,6 +429,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.prevLogIndex = 0
+	rf.prevLogTerm = 0
 
 	// Your initialization code here (3A, 3B, 3C).
 
