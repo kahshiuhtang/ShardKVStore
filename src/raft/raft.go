@@ -333,7 +333,9 @@ func (rf *Raft) requestVotes() {
 	args := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me}
 	rf.mu.Unlock()
 	for server := range rf.peers {
-		go rf.sendRequestVote(server, &args, &RequestVoteReply{})
+		if server != rf.me && rf.currentState == CANDIDATE {
+			go rf.sendRequestVote(server, &args, &RequestVoteReply{})
+		}
 	}
 
 }
@@ -343,7 +345,9 @@ func (rf *Raft) sendHeartbeats() {
 	args := AppendEntriesArgs{LeaderTerm: rf.currentTerm, LeaderId: rf.me}
 	rf.mu.Unlock()
 	for server := range rf.peers {
-		go rf.sendAppendEntries(server, &args, &AppendEntriesReply{})
+		if server != rf.me && rf.currentState == LEADER {
+			go rf.sendAppendEntries(server, &args, &AppendEntriesReply{})
+		}
 	}
 }
 func (rf *Raft) ticker() {
