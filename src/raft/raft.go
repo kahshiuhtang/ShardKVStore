@@ -205,7 +205,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.grantVoteChan <- true
 	}
 }
-
+func (rf *Raft) getLastLogsIndex() int {
+	return rf.logs[len(rf.logs)-1].Index
+}
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// Your code here (3A, 3B).
 	rf.mu.Lock()
@@ -225,14 +227,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.currentState = FOLLOWER
 	}
 	reply.Term = rf.currentTerm
-	if len(args.Entries) != 0 {
+	if len(args.Entries) > 0 {
 		if args.LeaderTerm < rf.currentTerm {
-			reply.Term = rf.currentTerm
-			reply.Success = false
 			return
-		} else {
-			rf.currentTerm = args.LeaderTerm
 		}
+		if args.PrevLogIndex > rf.getLastLogsIndex() {
+			return
+		}
+		leftIdx := rf.logs[0].Index
+		if leftIdx <= args.PrevLogIndex {
+			return
+		} else if args.PrevLogIndex >= leftIdx-1 {
+
+		}
+
 	}
 
 }
@@ -291,6 +299,9 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	if ok {
+
+	}
 	return ok
 }
 
